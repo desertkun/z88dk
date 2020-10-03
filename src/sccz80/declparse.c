@@ -598,7 +598,9 @@ static void parse_trailing_modifiers(Type *type)
         type->flags |= SMALLC;
     }
     while (1) {
-        if (amatch("__z88dk_fastcall") || amatch("__FASTCALL__")) {
+        if (amatch("__z88dk_preserve_hl2bc")) {
+            type->flags |= PRESERVE_HL2BC;
+        } else if (amatch("__z88dk_fastcall") || amatch("__FASTCALL__")) {
             if( type->parameters && array_len(type->parameters) != 1 ) {
                 warningfmt("sdcc-compat", "SDCC only supports a single parameter for __z88dk_fastcall\n");
             }
@@ -627,6 +629,32 @@ static void parse_trailing_modifiers(Type *type)
             continue;
         } else if ( amatch("__banked")) {
             type->flags |= BANKED;
+        } else if ( amatch("__z88dk_hl_call")) {
+
+            double module, addr;
+            Kind  valtype;
+
+            needchar('(');
+            if (constexpr(&module, &valtype, 0) == 0 ) {
+                errorfmt("Expecting a module address",1);
+            } else {
+                if ( module < 0 || module > 65535 ) {
+                    errorfmt("Module address value is out of range (%x)",1, (int)module);
+                }
+                needchar(',');
+                if ( constexpr(&addr,&valtype,0) == 0 ) {
+                    errorfmt("Expecting a call address",1);
+                } else {
+                    if ( addr < 0 || addr > 65535 ) {
+                        errorfmt("Short call value is out of range (%x)",1, (int)addr);
+                    }
+                    type->flags |= HL_CALL;
+                    type->funcattrs.hlcall_addr = addr;
+                    type->funcattrs.hlcall_module = module;
+                }
+            }
+            needchar(')');
+
         } else if ( amatch("__nonbanked")) {
             type->flags &= ~BANKED;
         } else if ( amatch("__z88dk_sdccdecl")) {
@@ -668,6 +696,8 @@ static void parse_trailing_modifiers(Type *type)
                 }
             }
             needchar(')');
+        } else if ( amatch("__z88dk_shortcall_hl")) {
+            type->flags |= SHORTCALL_HL;
         } else if (amatch("__preserves_regs")) {
             int c;
             needchar('(');
@@ -1427,6 +1457,9 @@ void flags_describe(Type *type, int32_t flags, UT_string *output)
     if ( flags & FASTCALL ) {
         utstring_printf(output,"__z88dk_fastcall ");
     }
+    if ( flags & PRESERVE_HL2BC ) {
+        utstring_printf(output,"__z88dk_preserve_hl2bc ");
+    }
     if ( flags & CALLEE ) {
         utstring_printf(output,"__z88dk_callee ");
     }  
@@ -1438,10 +1471,22 @@ void flags_describe(Type *type, int32_t flags, UT_string *output)
     }  
     if ( flags & CRITICAL ) {
         utstring_printf(output,"__critical ");
-    }  
+    }
 
     if ( flags & SHORTCALL ) {
         utstring_printf(output,"__z88dk_shortcall(%d,%d) ", type->funcattrs.shortcall_rst, type->funcattrs.shortcall_value);
+    }
+
+    if ( flags & HL_CALL ) {
+        utstring_printf(output,"__z88dk_hl_call(%d,%d) ", type->funcattrs.hlcall_module, type->funcattrs.hlcall_addr);
+    }
+
+    if ( flags & PRESERVE_HL2BC ) {
+        utstring_printf(output,"__z88dk_preserve_hl2bc ");
+    }
+
+    if ( flags & SHORTCALL_HL ) {
+        utstring_printf(output,"__z88dk_shortcall_hl ");
     }
 
     if ( type->funcattrs.params_offset ) {
