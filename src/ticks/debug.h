@@ -4,6 +4,7 @@
 #include "uthash.h"
 #include "utlist.h"
 #include "syms.h"
+#include "exp_engine.h"
 
 
 typedef struct cfile_s cfile;
@@ -141,8 +142,10 @@ extern int debug_resolve_source(char *name);
 extern int debug_resolve_source_forward(const char *filename, const char* within_function, int lineno);
 
 extern debug_sym_function* debug_find_function(const char* function_name, const char* file_name);
+extern enum expression_result_type_t debug_resolve_expression_element(type_chain* chain, char issigned, enum resolve_chain_value_kind resolve_by, uint32_t data, struct expression_result_t* into);
 extern int debug_print_element(type_chain* chain, char issigned, enum resolve_chain_value_kind resolve_by, uint32_t data, char *target, size_t targetlen);
-extern uint8_t debug_get_symbol_value(debug_sym_symbol* sym, debug_frame_pointer* frame_pointer, char *target, size_t targetlen);
+extern uint8_t debug_get_symbol_value_as_string(debug_sym_symbol* sym, debug_frame_pointer* frame_pointer, char *target, size_t targetlen);
+extern enum expression_result_type_t debug_get_symbol_value_expression(debug_sym_symbol* sym, debug_frame_pointer* frame_pointer, struct expression_result_t* into);
 extern uint8_t debug_symbol_valid(debug_sym_symbol* sym, uint16_t stack, debug_frame_pointer* frame_pointer);
 
 extern debug_frame_pointer* debug_stack_frames_construct(uint16_t pc, uint16_t sp, struct debugger_regs_t* regs, uint16_t limit);
