@@ -1078,6 +1078,11 @@ uint8_t debug_symbol_valid(debug_sym_symbol *sym, uint16_t stack, debug_frame_po
     return 1;
 }
 
+debug_sym_symbol* get_first_symbol()
+{
+    return csymbols;
+}
+
 static uint16_t wrap_reg(uint8_t h, uint8_t l)
 {
     uint16_t data;
