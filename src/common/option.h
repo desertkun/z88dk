@@ -33,7 +33,7 @@ struct option_s {
 };
 
 
-int option_parse(option *args, int argc, char **argv);
+int option_parse(option *args, int skipargs, int argc, char **argv);
 void option_list(option *cur);
 
 

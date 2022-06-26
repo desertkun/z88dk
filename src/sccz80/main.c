@@ -226,7 +226,7 @@ int main(int argc, char** argv)
     atexit(atexit_deallocate); /* To free everything */
     clear();
     filenum = 0;
-    gargc = option_parse(sccz80_opts, argc, argv);
+    gargc = option_parse(sccz80_opts, 1, argc, argv);
     clear();
 
     if (gargc == 0) {

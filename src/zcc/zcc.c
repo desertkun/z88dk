@@ -24,6 +24,8 @@
 #include        <inttypes.h>
 #include        <time.h>
 #include        <sys/stat.h>
+#include        "../../ext/uthash/include/uthash.h"
+#include        "../../ext/uthash/include/utlist.h"
 #include        "zcc.h"
 #include        "regex/regex.h"
 #include        "dirname.h"
@@ -103,7 +105,7 @@ struct pragma_m4_s {
 
 static void            add_option_to_compiler(char *arg);
 static void            gather_from_list_file(char *filename);
-static void            add_file_to_process(char *filename);
+static void            add_file_to_process(char *filename, char process_extension);
 
 static void            SetNumber(arg_t *argument, char *arg);
 static void            SetStringConfig(arg_t *argument, char *arg);
@@ -180,6 +182,13 @@ static char           *strip_outer_quotes(char *p);
 static int             zcc_asprintf(char **s, const char *fmt, ...);
 static int             zcc_getdelim(char **lineptr, unsigned int *n, int delimiter, FILE *stream);
 
+struct explicit_extension
+{
+    char* filename;
+    char* extension;
+    UT_hash_handle hh;
+};
+
 static int             createapp = 0;    /* Go the next stage and create the app */
 static int             z80verbose = 0;
 static int             cleanup = 1;
@@ -190,6 +199,8 @@ static int             m4only = 0;
 static int             clangonly = 0;
 static int             llvmonly = 0;
 static int             makelib = 0;
+static int             explicit_file_type_c = 0;
+static struct explicit_extension* explicit_extensions = NULL;
 static int             build_bin = 0;
 static int             c_code_in_asm = 0;
 static int             opt_code_size = 0;
@@ -203,6 +214,7 @@ static int             mapon = 0;
 static int             globaldefon = 0;
 static char           *globaldefrefile = NULL;
 static int             preprocessonly = 0;
+static int             printmacros = 0;
 static int             relocate = 0;
 static int             relocinfo = 0;
 static int             sdcc_signed_char = 0;
@@ -447,10 +459,12 @@ static option options[] = {
     { 0, "", OPT_HEADER, "Lifecycle options:", NULL, NULL, 0 },
     { 0, "m4", OPT_BOOL,  "Stop after processing m4 files" , &m4only, NULL, 0},
     { 'E', "preprocess-only", OPT_BOOL|OPT_DOUBLE_DASH,  "Stop after preprocessing files" , &preprocessonly, NULL, 0},
+    { 0, "dD", OPT_BOOL,  "Print macro definitions in -E mode in addition to normal output" , &printmacros, NULL, 0},
     { 'c', "compile-only", OPT_BOOL|OPT_DOUBLE_DASH,  "Stop after compiling .c .s .asm files to .o files" , &compileonly, NULL, 0},
     { 'a', "assemble-only", OPT_BOOL|OPT_DOUBLE_DASH,  "Stop after compiling .c .s files to .asm files" , &assembleonly, NULL, 0},
     { 'S', "assemble-only", OPT_BOOL|OPT_DOUBLE_DASH,  "Stop after compiling .c .s files to .asm files" , &assembleonly, NULL, 0},
     { 'x', NULL, OPT_BOOL,  "Make a library out of source files" , &makelib, NULL, 0},
+    { 0, "xc", OPT_BOOL,  "Explicitly specify file type as C" , &explicit_file_type_c, NULL, 0},
     { 0, "create-app", OPT_BOOL,  "Run appmake on the resulting binary to create emulator usable file" , &createapp, NULL, 0},
 
 
@@ -596,6 +610,14 @@ static int hassuffix(char *name, char *suffix)
 {
     int             nlen, slen;
 
+    {
+        struct explicit_extension* exp = NULL;
+        HASH_FIND_STR(explicit_extensions, name, exp);
+        if (exp && (strcmp(exp->extension, suffix) == 0)) {
+            return 1;
+        }
+    }
+
     nlen = strlen(name);
     slen = strlen(suffix);
 
@@ -631,6 +653,20 @@ static char *changesuffix(char *name, char *suffix)
     }
 
     return (r);
+}
+
+static int explicit_file_type_defined()
+{
+    return explicit_file_type_c;
+}
+
+static char* get_explicit_file_type()
+{
+    if (explicit_file_type_c) {
+        return ".c";
+    }
+
+    return NULL;
 }
 
 int process(char *suffix, char *nextsuffix, char *processor, char *extraargs, enum iostyle ios, int number, int needsuffix, int src_is_original)
@@ -853,8 +889,20 @@ int main(int argc, char **argv)
     }
 
     setup_default_configuration();
+    int skip_arguments;
 
-    gc = find_zcc_config_fileFile(argv[0], argv[gc], gc, config_filename, sizeof(config_filename));
+    char* executable_suffix = strchr(argv[0], '-');
+    if (executable_suffix) {
+        executable_suffix++;
+        char plus_platform[64];
+        sprintf(plus_platform, "+%s", executable_suffix);
+        find_zcc_config_fileFile(argv[0], plus_platform, gc, config_filename, sizeof(config_filename));
+        skip_arguments = 0;
+    } else {
+        gc = find_zcc_config_fileFile(argv[0], argv[gc], gc, config_filename, sizeof(config_filename));
+        skip_arguments = 1;
+    }
+
     parse_configfile(config_filename);
 
 
@@ -884,13 +932,13 @@ int main(int argc, char **argv)
     gargv = argv;        /* Point argv to start of command line */
 
     processing_user_command_line_arg = 1;
-    argc = option_parse(&options[0], argc - 1, &argv[1]);
+    argc = option_parse(&options[0], skip_arguments, argc - 1, &argv[1]);
     for (gargc = 1; gargc < argc+1; gargc++) {
         // We have some options left over, it may well be an alias
         if (argv[gargc][0] == '-') {
             parse_cmdline_arg(argv[gargc]);
         } else {
-            add_file_to_process(argv[gargc]);
+            add_file_to_process(argv[gargc], 1);
         }
     }
     processing_user_command_line_arg = 0; 
@@ -1041,6 +1089,10 @@ int main(int argc, char **argv)
     BuildOptions(&llvmarg, llvmarg ? "-disable-partial-libcall-inlining " : "-O2 -disable-partial-libcall-inlining ");
     BuildOptions(&llvmopt, llvmopt ? "-disable-simplify-libcalls -disable-loop-vectorization -disable-slp-vectorization -S " : "-O2 -disable-simplify-libcalls -disable-loop-vectorization -disable-slp-vectorization -S ");
 
+    if (printmacros)
+    {
+        BuildOptions(&cpparg, "-d");
+    }
 
     /* Peephole optimization level for sdcc */
     if (compiler_type == CC_SDCC && c_cpu != CPU_TYPE_GBZ80)
@@ -1117,7 +1169,7 @@ int main(int argc, char **argv)
     /* Activate target's crt file */
     if ((c_nocrt == 0) && build_bin) {
         /* append target crt to end of filelist */
-        add_file_to_process(c_crt0);
+        add_file_to_process(c_crt0, 0);
         /* move crt to front of filelist */
         ptr = original_filenames[nfiles - 1];
         memmove(&original_filenames[1], &original_filenames[0], (nfiles - 1) * sizeof(*original_filenames));
@@ -2210,6 +2262,15 @@ void add_option_to_compiler(char *arg)
 
 char *find_file_ext(char *filename)
 {
+    {
+        struct explicit_extension* explicit = NULL;
+        HASH_FIND_STR(explicit_extensions, filename, explicit);
+        if (explicit)
+        {
+            return explicit->extension;
+        }
+    }
+
     char *p;
 
     if ((p = last_path_char(filename)) == NULL)
@@ -2229,6 +2290,12 @@ int is_path_absolute(char *p)
     return (*p == '/') || (*p == '\\');
 #endif
 }
+
+struct tokens_list_s
+{
+    char* token;
+    struct tokens_list_s* next;
+};
 
 void gather_from_list_file(char *filename)
 {
@@ -2257,7 +2324,22 @@ void gather_from_list_file(char *filename)
     /* read filenames from list file */
     line = NULL;
     while (zcc_getdelim(&line, &len, '\n', in) > 0) {
-        if (((p = strtok(line, " \r\n\t")) != NULL) && *p) {
+        p = strtok(line, " \r\n\t");
+
+        struct tokens_list_s* tokens = NULL;
+
+        while (p != NULL)
+        {
+            struct tokens_list_s* token = mustmalloc(sizeof(struct tokens_list_s));
+            token->token = strdup(p);
+            LL_APPEND(tokens, token);
+            p = strtok(NULL, " \r\n\t");
+        }
+
+        struct tokens_list_s* token;
+        LL_FOREACH(tokens, token) {
+            p = token->token;
+
             /* check for comment line */
             if ((*p == ';') || (*p == '#'))
                 continue;
@@ -2265,35 +2347,44 @@ void gather_from_list_file(char *filename)
             /* clear output filename */
             *outname = '\0';
 
-            /* prepend list file indicator if the filename is a list file */
-            if (*p == '@') {
-                strcpy(outname, "@");
-                if (((p = strtok(p + 1, " \r\n\t")) == NULL) || !(*p))
-                    continue;
-            }
-
             /* sanity check */
             if (strlen(p) > FILENAME_MAX) {
                 fprintf(stderr, "Filename is too long \"%s\"\n", p);
                 exit(1);
             }
 
-            /* prepend path if filename is not absolute */
-            if (!lstcwd && !is_path_absolute(p))
-                strcat(outname, pathname);
+            if (p[0] == '-') {
+                parse_cmdline_arg(p);
+            } else {
+                /* prepend path if filename is not absolute */
+                if (!lstcwd && !is_path_absolute(p))
+                    strcat(outname, pathname);
 
-            /* append rest of filename */
-            strcat(outname, p);
+                /* append rest of filename */
+                strcat(outname, p);
 
-            /* add file to process */
+                /* add file to process */
 
-            if (strlen(outname) >= FILENAME_MAX) {
-                fprintf(stderr, "Filename is too long \"%s\"\n", outname);
-                exit(1);
+                if (strlen(outname) >= FILENAME_MAX) {
+                    fprintf(stderr, "Filename is too long \"%s\"\n", outname);
+                    exit(1);
+                }
+
+                add_file_to_process(outname, 1);
             }
 
-            add_file_to_process(outname);
+            p = strtok(NULL, " \r\n\t");
         }
+
+        {
+            struct tokens_list_s* tmp;
+            LL_FOREACH_SAFE(tokens, token, tmp)
+            {
+                LL_DELETE(tokens, token);
+                free(token);
+            }
+        }
+
     }
 
     if (!feof(in)) {
@@ -2305,7 +2396,7 @@ void gather_from_list_file(char *filename)
     fclose(in);
 }
 
-void add_file_to_process(char *filename)
+void add_file_to_process(char *filename, char process_extension)
 {
     FILE *fclaim;
     char tname[FILENAME_MAX + 1];
@@ -2332,24 +2423,32 @@ void add_file_to_process(char *filename)
                 exit(1);
             }
 
-            /* Add this file to the list of original files */
-            if (find_file_ext(p) == NULL) {
-                /* file without extension - see if it exists, exclude directories */
-                if ((stat(p, &tmp) == 0) && (!(tmp.st_mode & S_IFDIR))) {
-                    fprintf(stderr, "Unrecognized file type %s\n", p);
-                    exit(1);
-                }
-                /* input file has no extension and does not exist so assume .asm then .o then .asm.m4 */
-                original_filenames[nfiles] = mustmalloc((strlen(p) + 8) * sizeof(char));
-                strcpy(original_filenames[nfiles], p);
-                strcat(original_filenames[nfiles], ".asm");
-                if (stat(original_filenames[nfiles], &tmp) != 0) {
-                    strcpy(strrchr(original_filenames[nfiles], '.'), ".o");
-                    if (stat(original_filenames[nfiles], &tmp) != 0)
-                        strcpy(strrchr(original_filenames[nfiles], '.'), ".asm.m4");
-                }
-            } else {
+            if (process_extension && explicit_file_type_defined()) {
+                struct explicit_extension* exp = mustmalloc(sizeof(struct explicit_extension));
+                exp->filename = muststrdup(p);
+                exp->extension = get_explicit_file_type();
+                HASH_ADD_STR(explicit_extensions, filename, exp);
                 original_filenames[nfiles] = muststrdup(p);
+            } else {
+                /* Add this file to the list of original files */
+                if (find_file_ext(p) == NULL) {
+                    /* file without extension - see if it exists, exclude directories */
+                    if ((stat(p, &tmp) == 0) && (!(tmp.st_mode & S_IFDIR))) {
+                        fprintf(stderr, "Unrecognized file type %s\n", p);
+                        exit(1);
+                    }
+                    /* input file has no extension and does not exist so assume .asm then .o then .asm.m4 */
+                    original_filenames[nfiles] = mustmalloc((strlen(p) + 8) * sizeof(char));
+                    strcpy(original_filenames[nfiles], p);
+                    strcat(original_filenames[nfiles], ".asm");
+                    if (stat(original_filenames[nfiles], &tmp) != 0) {
+                        strcpy(strrchr(original_filenames[nfiles], '.'), ".o");
+                        if (stat(original_filenames[nfiles], &tmp) != 0)
+                            strcpy(strrchr(original_filenames[nfiles], '.'), ".asm.m4");
+                    }
+                } else {
+                    original_filenames[nfiles] = muststrdup(p);
+                }
             }
 
             /* Working file is the original file */
@@ -2433,7 +2532,7 @@ void parse_cmdline_arg(char *arg)
 
     tempargv[1] = arg;
 
-    if ( option_parse(&options[0], 2, &tempargv[0]) == 0 ) {
+    if ( option_parse(&options[0], 1, 2, &tempargv[0]) == 0 ) {
         return;
     }
    
@@ -2818,6 +2917,17 @@ void copy_output_files_to_destdir(char *suffix, int die_on_fail)
                     free(name);
                 }
 
+                if (verbose) {
+                    FILE* f = fopen(ptr, "r");
+                    if (f) {
+                        static char buf[1024];
+                        unsigned long nread;
+                        while ((nread = fread(buf, 1, sizeof(buf), f)) > 0)
+                            fwrite(buf, 1, nread, stdout);
+                        fclose(f);
+                    }
+                }
+
                 /* copy to output directory */
                 if (copy_file(ptr, "", fname, "")) {
                     fprintf(stderr, "Couldn't copy output file %s\n", fname);
@@ -2983,7 +3093,7 @@ void parse_option(char *option)
             if (ptr[0] == '-') {
                 parse_cmdline_arg(strip_inner_quotes(ptr));
             } else {
-                add_file_to_process(strip_outer_quotes(ptr));
+                add_file_to_process(strip_outer_quotes(ptr), 1);
             }
             ptr = qstrtok(NULL, " \t\r\n");
         }

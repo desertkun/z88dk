@@ -203,6 +203,7 @@ install: install-clean
 	cp -r include $(prefix_share)/
 	cp -r lib $(prefix_share)/
 	cp -r libsrc $(prefix_share)/
+	cp -r cmake $(prefix_share)/
 	cp -r src/m4 $(prefix_share)/src/
 
 

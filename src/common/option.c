@@ -42,12 +42,12 @@ static void set_option(option *arg, char *value)
 }
 
 
-int option_parse(option *args, int argc, char **argv)
+int option_parse(option *args, int skipargs, int argc, char **argv)
 {
     int    i;
     int    outargc = 0;
 
-    for ( i = 1; i < argc; i++ ) {
+    for ( i = skipargs; i < argc; i++ ) {
         option *myarg;
         if ( argv[i][0] == '-') {
             char   *argstart = argv[i] + 1;
