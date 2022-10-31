@@ -1040,8 +1040,7 @@ int declare_local(int local_static)
                         clearstage(before, start);
                         //conv type
                         force(type->kind, expr, type->isunsigned, expr_type->isunsigned, 0);
-
-                        // ????????
+                        gen_store_static(sym);
                     }
                 }
             } else {
