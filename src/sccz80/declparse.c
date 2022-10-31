@@ -629,6 +629,9 @@ static void parse_trailing_modifiers(Type *type)
         } else if (amatch("__naked")) {
             type->flags |= NAKED;
             continue;
+        } else if (amatch("__z88dk_non_reentrant")) {
+            type->flags |= NON_REENTRANT;
+            continue;
         } else if ( amatch("__critical")) {
             type->flags |= CRITICAL;
             continue;
@@ -997,62 +1000,108 @@ int declare_local(int local_static)
                 sym->bss_section = STRDUP(get_section_name(sym->ctype->namespace, c_bss_section));
             }
         } else {
-            int size = type->size;
+            if (currfn->flags & NON_REENTRANT) {
+                char  namebuf[NAMESIZE * 2 + 10];
+                snprintf(namebuf, sizeof(namebuf), "st_%s_%s", currfn->name, type->name);
+                sym = addglb(namebuf, type, ID_VARIABLE, type->kind, 0, LSTATIC);
+                printf(">>>%s\n", namebuf);
+                sym->bss_section = STRDUP(get_section_name(sym->ctype->namespace, c_bss_section));
+                if ( cmatch('=')) {
+                    sym->isassigned = 1;
 
-            if  ( size < 0 ) size = 0;
-
-            declared += size;                        
-            sym = addloc(type->name, type, ID_VARIABLE, type->kind, Zsp - declared);
-            if ( cmatch('=')) {
-                sym->isassigned = 1;
-                sym->initialised = 1;
-                if ( type->kind == KIND_STRUCT || type->kind == KIND_ARRAY ) {
-                    // Call static initialiser and copy onto stack
-                    char newname[NAMESIZE * 2 + 20];
-
-                    snprintf(newname, sizeof(newname),"auto_%s_%s",currfn->name, sym->name);
-                    int alloc_size = initials(newname, type);
-                    
-                    declared += (alloc_size - size);
-                    if ( type->kind == KIND_ARRAY ) {
-                        sym->offset.i -= (alloc_size -size);
-                        sym->size += (alloc_size - size);
-                    }
-                    Zsp = modstk(Zsp - declared, KIND_NONE, NO, YES);
-                    declared = 0;
-                    copy_to_stack(newname, 0, alloc_size);
-                } else {
                     Kind expr;
                     Type *expr_type;
                     char *before, *start;
-                    int   vconst;
+                    int vconst;
                     zdouble val;
 
-                    Zsp = modstk(Zsp - (declared - type->size), KIND_NONE, NO, YES);
-                    declared = 0;
                     setstage(&before, &start);
+
                     expr = expression(&vconst, &val, &expr_type);
 
-                    if ( expr_type->kind == KIND_VOID ) {
-                        warningfmt("void","Assigning from a void expression");
+                    if (expr_type->kind == KIND_VOID) {
+                        warningfmt("void", "Assigning from a void expression");
                     }
 
                     check_pointer_namespace(type, expr_type);
-                    
-                    if ( vconst && expr != type->kind ) {
+
+                    if (vconst && expr != type->kind) {
+                        printf("const %s!\n", namebuf);
                         // It's a constant that doesn't match the right type
-                        LVALUE  lval={0};
+                        LVALUE lval = {0};
                         clearstage(before, 0);
                         lval.ltype = type;
                         lval.val_type = type->kind;
                         lval.const_val = val;
+                        lval.symbol = sym;
                         load_constant(&lval);
+                        smartstore(&lval);
                     } else {
                         clearstage(before, start);
                         //conv type
                         force(type->kind, expr, type->isunsigned, expr_type->isunsigned, 0);
+
+                        // ????????
                     }
-                    gen_store_to_tos(type->kind);
+                }
+            } else {
+                int size = type->size;
+
+                if (size < 0) size = 0;
+
+                declared += size;
+                sym = addloc(type->name, type, ID_VARIABLE, type->kind, Zsp - declared);
+                if (cmatch('=')) {
+                    sym->isassigned = 1;
+                    sym->initialised = 1;
+                    if (type->kind == KIND_STRUCT || type->kind == KIND_ARRAY) {
+                        // Call static initialiser and copy onto stack
+                        char newname[NAMESIZE * 2 + 20];
+
+                        snprintf(newname, sizeof(newname), "auto_%s_%s", currfn->name, sym->name);
+                        int alloc_size = initials(newname, type);
+
+                        declared += (alloc_size - size);
+                        if (type->kind == KIND_ARRAY) {
+                            sym->offset.i -= (alloc_size - size);
+                            sym->size += (alloc_size - size);
+                        }
+                        Zsp = modstk(Zsp - declared, KIND_NONE, NO, YES);
+                        declared = 0;
+                        copy_to_stack(newname, 0, alloc_size);
+                    } else {
+                        Kind expr;
+                        Type *expr_type;
+                        char *before, *start;
+                        int vconst;
+                        zdouble val;
+
+                        Zsp = modstk(Zsp - (declared - type->size), KIND_NONE, NO, YES);
+                        declared = 0;
+                        setstage(&before, &start);
+                        expr = expression(&vconst, &val, &expr_type);
+
+                        if (expr_type->kind == KIND_VOID) {
+                            warningfmt("void", "Assigning from a void expression");
+                        }
+
+                        check_pointer_namespace(type, expr_type);
+
+                        if (vconst && expr != type->kind) {
+                            // It's a constant that doesn't match the right type
+                            LVALUE lval = {0};
+                            clearstage(before, 0);
+                            lval.ltype = type;
+                            lval.val_type = type->kind;
+                            lval.const_val = val;
+                            load_constant(&lval);
+                        } else {
+                            clearstage(before, start);
+                            //conv type
+                            force(type->kind, expr, type->isunsigned, expr_type->isunsigned, 0);
+                        }
+                        gen_store_to_tos(type->kind);
+                    }
                 }
             }
         }
@@ -1485,7 +1534,10 @@ void flags_describe(Type *type, int32_t flags, UT_string *output)
     }  
     if ( flags & NAKED ) {
         utstring_printf(output,"__naked ");
-    }  
+    }
+    if ( flags & NON_REENTRANT ) {
+        utstring_printf(output,"__z88dk_non_reentrant ");
+    }
     if ( flags & CRITICAL ) {
         utstring_printf(output,"__critical ");
     }
