@@ -8,6 +8,7 @@
 #define __LIB__
 #define __SAVEFRAME__
 #define __z88dk_fastcall
+#define __z88dk_non_reentrant
 #define __FASTCALL__
 #define __CALLEE__
 #define __SCCZ80
